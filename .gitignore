@@ -1,0 +1,10 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 联系人隐私（不上传）
+contacts.json
+
+# 本地启动脚本（含本机 D 盘路径，不上传）
+*.bat
