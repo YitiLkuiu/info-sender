@@ -124,20 +124,70 @@ def _verify_sent():
     return pyperclip.paste() == ""
 
 
-def send_one(name, content, interval=1.5, cfg=None):
-    """给单个对象发一条消息，返回是否发送成功。"""
+def copy_file_to_clipboard(path):
+    """把文件以 CF_HDROP 格式复制到剪贴板，供聊天窗口 Ctrl+V 粘贴成附件。"""
+    import ctypes
+    import struct
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    CF_HDROP = 15
+    GMEM_MOVEABLE = 0x0002
+
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+
+    data = path.encode("utf-16-le") + b"\x00\x00"      # 宽字符路径，双 \0 结尾
+    header = struct.pack("<IIIII", 20, 0, 0, 0, 1)     # DROPFILES 头：pFiles=20, fWide=1
+    blob = header + data
+
+    if not user32.OpenClipboard(None):
+        return False
+    try:
+        user32.EmptyClipboard()
+        hmem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(blob))
+        if not hmem:
+            return False
+        p = kernel32.GlobalLock(hmem)
+        if not p:
+            kernel32.GlobalFree(hmem)
+            return False
+        ctypes.memmove(p, blob, len(blob))
+        kernel32.GlobalUnlock(hmem)
+        user32.SetClipboardData(CF_HDROP, hmem)
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
+def send_one(name, content, interval=1.5, cfg=None, file_path=None):
+    """给单个对象发一条消息（文字 / 文件 / 文字+文件），返回是否发送成功。"""
     cfg = cfg or PLATFORMS["微信"]
     _search_and_enter(name, cfg)
-    _paste(content)
-    time.sleep(0.3)
-    _press_enter()                  # 发送
-    time.sleep(0.35)
-    ok = _verify_sent()
+    if content:
+        _paste(content)
+        time.sleep(0.3)
+        _press_enter()              # 发送文字
+        time.sleep(0.35)
+    if file_path:
+        copy_file_to_clipboard(file_path)
+        time.sleep(0.3)
+        pyautogui.hotkey("ctrl", "v")   # 粘贴成文件附件（不走 _paste，避免覆盖剪贴板）
+        time.sleep(1.2)                  # 等附件加载
+        _press_enter()                   # 发送文件
+        time.sleep(0.5)
+    ok = _verify_sent() if (content and not file_path) else True
     time.sleep(interval)
     return ok
 
 
-def send_many(names, content, interval=1.5, log=None, controller=None, on_progress=None, platform="微信"):
+def send_many(names, content, interval=1.5, log=None, controller=None, on_progress=None, platform="微信", file_path=None):
     """给多个对象逐个发消息。
 
     controller: SendController，用于暂停/取消。
@@ -165,7 +215,7 @@ def send_many(names, content, interval=1.5, log=None, controller=None, on_progre
         try:
             if log:
                 log(f"[{i + 1}/{total}] 发送给：{name}")
-            if send_one(name, content, interval, cfg):
+            if send_one(name, content, interval, cfg, file_path=file_path):
                 ok += 1
             else:
                 failed.append(name)

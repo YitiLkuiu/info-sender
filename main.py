@@ -10,7 +10,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, filedialog
 
 import core
 import scheduler
@@ -79,11 +79,12 @@ class Task:
     _next_id = 1
 
     def __init__(self, names, content, platform="微信", hour=None, minute=None, interval=1.5,
-                 month=None, day=None):
+                 month=None, day=None, file=None):
         self.id = Task._next_id
         Task._next_id += 1
         self.names = list(names)
         self.content = content
+        self.file = file
         self.platform = platform
         self.hour = hour
         self.minute = minute
@@ -100,7 +101,10 @@ class Task:
 
     def label(self):
         st = STATUS_TEXT.get(self.status, self.status)
-        preview = self.content.replace("\n", " ")[:14]
+        if self.file:
+            preview = "[文件] " + os.path.basename(self.file)
+        else:
+            preview = self.content.replace("\n", " ")[:14]
         timeinfo = ""
         if self.hour is not None:
             if self.month is not None:
@@ -214,8 +218,16 @@ class App:
                                     insertbackground=C_TEXT, padx=10, pady=8, wrap="word")
         self.content_text.grid(row=1, column=0, sticky="ew")
 
+        rowf = tk.Frame(card, bg=C_CARD)
+        rowf.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        self._label(rowf, "文件", size=10).pack(side="left")
+        self.file_entry = self._entry(rowf)
+        self.file_entry.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        self._button(rowf, "选择文件", self.pick_file, "secondary").pack(side="left")
+        self._button(rowf, "清除", self.clear_file, "ghost").pack(side="left", padx=(6, 0))
+
         row2 = tk.Frame(card, bg=C_CARD)
-        row2.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        row2.grid(row=3, column=0, sticky="ew", pady=(10, 0))
 
         self._label(row2, "日期 MM-DD(可选)", size=10).pack(side="left")
         self.date_entry = self._entry(row2, width=8)
@@ -358,6 +370,15 @@ class App:
     def _get_content(self):
         return self.content_text.get("1.0", "end").rstrip("\n")
 
+    def pick_file(self):
+        path = filedialog.askopenfilename(title="选择要发送的文件")
+        if path:
+            self.file_entry.delete(0, tk.END)
+            self.file_entry.insert(0, path)
+
+    def clear_file(self):
+        self.file_entry.delete(0, tk.END)
+
     def _get_interval(self):
         try:
             v = float(self.interval_entry.get().strip())
@@ -365,9 +386,9 @@ class App:
         except Exception:
             return 1.5
 
-    def _create_task(self, names, content, hour, minute, interval, month=None, day=None):
+    def _create_task(self, names, content, hour, minute, interval, month=None, day=None, file_path=None):
         task = Task(names, content, platform=self.current_platform,
-                    hour=hour, minute=minute, interval=interval, month=month, day=day)
+                    hour=hour, minute=minute, interval=interval, month=month, day=day, file=file_path)
         self.tasks[task.id] = task
         self._refresh_tasks()
         self.log("=" * 40)
@@ -393,7 +414,7 @@ class App:
             ok, failed = core.send_many(
                 task.names, task.content, interval=task.interval,
                 log=self.log, controller=task.controller, on_progress=progress,
-                platform=task.platform)
+                platform=task.platform, file_path=task.file)
             task.status = "cancelled" if task.controller.cancelled else "done"
             self.root.after(0, self._refresh_tasks)
             self.log(f"任务{task.id} 结束：成功 {ok} 条，失败 {len(failed)} 条")
@@ -475,6 +496,10 @@ class App:
             self.date_entry.insert(0, f"{task.month:02d}-{task.day:02d}")
         self.interval_entry.delete(0, tk.END)
         self.interval_entry.insert(0, str(task.interval))
+        # 文件
+        self.file_entry.delete(0, tk.END)
+        if task.file:
+            self.file_entry.insert(0, task.file)
         # 移除旧任务
         task.controller.cancel()
         del self.tasks[task.id]
@@ -485,11 +510,12 @@ class App:
     def _collect(self, require_time):
         names = self._get_selected_names()
         content = self._get_content()
+        file_path = self.file_entry.get().strip() or None
         if not names:
             messagebox.showwarning("提示", "请先在左侧勾选要发的人")
             return None
-        if not content:
-            messagebox.showwarning("提示", "请填写发送内容")
+        if not content and not file_path:
+            messagebox.showwarning("提示", "请填写发送内容或选择文件")
             return None
         interval = self._get_interval()
         hour = minute = month = day = None
@@ -522,22 +548,22 @@ class App:
             except Exception:
                 messagebox.showwarning("提示", "日期格式错误，请用 MM-DD，例如 08-16")
                 return None
-        return names, content, hour, minute, interval, month, day
+        return names, content, hour, minute, interval, month, day, file_path
 
     def send_now(self):
         r = self._collect(require_time=False)
         if not r:
             return
-        names, content, hour, minute, interval, month, day = r
-        task = self._create_task(names, content, hour, minute, interval, month, day)
+        names, content, hour, minute, interval, month, day, file_path = r
+        task = self._create_task(names, content, hour, minute, interval, month, day, file_path)
         self._start_task(task)
 
     def send_later(self):
         r = self._collect(require_time=True)
         if not r:
             return
-        names, content, hour, minute, interval, month, day = r
-        task = self._create_task(names, content, hour, minute, interval, month, day)
+        names, content, hour, minute, interval, month, day, file_path = r
+        task = self._create_task(names, content, hour, minute, interval, month, day, file_path)
         self._start_task(task)
         self.log("⚠ 到点前请保持程序运行、电脑不睡眠、不合盖、微信/QQ 登录在线")
 
