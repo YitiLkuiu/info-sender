@@ -2,7 +2,7 @@
 """微信群发 / 定时发送助手 —— 图形界面入口（支持微信 / QQ 双平台）。
 
 运行方式：python main.py
-界面风格：仿苹果官网 —— 浅灰底、白色卡片、苹果蓝强调色、大量留白。
+界面风格：现代浅色设计 —— 圆角卡片、渐变横幅、药丸按钮、悬停反馈。
 """
 import datetime
 import json
@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox, scrolledtext, filedialog
 
 import core
@@ -35,19 +36,180 @@ STATUS_TEXT = {
 
 PLATFORM_NAMES = list(core.PLATFORMS.keys())   # ["微信", "QQ"]
 
-# ---------- 苹果风配色 ----------
-C_BG = "#f5f5f7"          # 页面浅灰底
+# ---------- 现代配色（参考苹果/谷歌/腾讯的浅色设计语言） ----------
+C_BG = "#eef1f6"          # 页面浅灰底（带一点冷调）
 C_CARD = "#ffffff"        # 卡片白
-C_BORDER = "#e8e8ed"      # 卡片描边
-C_TEXT = "#1d1d1f"        # 主文字
-C_SUB = "#86868b"         # 次要文字
-C_ACCENT = "#0071e3"      # 苹果蓝
-C_ACCENT_HOVER = "#0077ed"
-C_DANGER = "#ff3b30"      # 删除红
-C_DANGER_BG = "#fff0ef"
-C_FIELD_BG = "#fbfbfd"    # 输入框浅底
+C_BORDER = "#e4e7ef"      # 卡片/输入框描边
+C_TEXT = "#1a1d24"        # 主文字
+C_SUB = "#6b7280"         # 次要文字
+C_ACCENT = "#3b82f6"      # 主蓝（谷歌式）
+C_DANGER = "#f04438"      # 删除红
+C_FIELD_BG = "#f7f8fa"    # 输入框浅底
+C_SUCCESS = "#16a34a"     # 成功绿
 
 FONT = "Microsoft YaHei UI"
+
+# 状态颜色（任务列表）
+STATUS_COLOR = {
+    "running": "#2563eb", "waiting": "#8b8fa3", "paused": "#d97706",
+    "done": "#16a34a", "cancelled": "#9aa0ab",
+}
+
+# 按钮配色：fill 常态 / grad 渐变底(竖向) / hover 悬停 / press 按下 / fg 文字 / border 描边
+BTN_STYLES = {
+    "primary":   {"fill": "#3b82f6", "grad": "#2563eb", "hover": "#2f6feb", "press": "#1f5fd6", "fg": "#ffffff"},
+    "secondary": {"fill": "#eaf1fe", "hover": "#dce8fe", "press": "#cfe0fd", "fg": "#2f6bff"},
+    "ghost":     {"fill": "#ffffff", "hover": "#f3f4f6", "press": "#e9ebef", "fg": "#1a1d24", "border": "#e2e5ec"},
+    "danger":    {"fill": "#ffffff", "hover": "#fef2f2", "press": "#fde8e8", "fg": "#f04438", "border": "#f6d9d8"},
+    "seg":       {"fill": "#eef0f4", "hover": "#e6e9ef", "press": "#dde2ea", "fg": "#4b5563"},
+}
+
+# 平台品牌色（选中态）：微信绿 / QQ 蓝
+PLATFORM_BRAND = {
+    "微信": ("#07c160", "#05a954"),
+    "QQ":   ("#12b7f5", "#0f9ede"),
+}
+
+
+# ---------- 绘制工具 ----------
+def _hex2rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb2hex(r, g, b):
+    return "#%02x%02x%02x" % (int(r), int(g), int(b))
+
+
+def _round_pts(x1, y1, x2, y2, r):
+    return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+            x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+
+
+def _draw_rounded(cv, x1, y1, x2, y2, r, **kw):
+    return cv.create_polygon(_round_pts(x1, y1, x2, y2, r), smooth=True, **kw)
+
+
+def _draw_gradient_rounded(cv, x1, y1, x2, y2, r, c1, c2):
+    """竖向渐变圆角矩形：逐行画线，两端按圆角收窄，模拟渐变。"""
+    r1, g1, b1 = _hex2rgb(c1)
+    r2, g2, b2 = _hex2rgb(c2)
+    steps = max(12, int(y2 - y1))
+    for i in range(steps):
+        t = i / (steps - 1)
+        y = y1 + (y2 - y1) * t
+        col = _rgb2hex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t)
+        inset = 0.0
+        if y < y1 + r:
+            dy = y1 + r - y
+            inset = r - (r * r - dy * dy) ** 0.5
+        elif y > y2 - r:
+            dy = y - (y2 - r)
+            inset = r - (r * r - dy * dy) ** 0.5
+        cv.create_line(x1 + inset, y, x2 - inset, y, fill=col)
+
+
+class RoundedCard(tk.Frame):
+    """圆角卡片：Canvas 画圆角白底 + 柔和投影，内容放进 self.body（grid 布局）。"""
+
+    def __init__(self, master, radius=14, padx=18, pady=16, bg=C_BG, card=C_CARD,
+                 border=C_BORDER, shadow="#e3e7ef", **kw):
+        super().__init__(master, bg=bg, **kw)
+        self.radius = radius
+        self.card = card
+        self.border = border
+        self._shadow = shadow
+        self.cv = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
+        self.cv.place(x=0, y=0, relwidth=1, relheight=1)
+        self.body = tk.Frame(self, bg=card)
+        self.body.grid(row=0, column=0, sticky="nsew", padx=padx, pady=pady)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.bind("<Configure>", self._redraw)
+
+    def _redraw(self, e=None):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 6 or h < 6:
+            return
+        self.cv.delete("all")
+        _draw_rounded(self.cv, 2, 4, w - 1, h - 1, self.radius, fill=self._shadow)
+        _draw_rounded(self.cv, 0, 0, w - 2, h - 4, self.radius, fill=self.card,
+                      outline=self.border, width=1)
+        self.cv.lower()
+
+
+class PillButton(tk.Canvas):
+    """圆角药丸按钮：渐变/纯色填充 + 悬停/按下反馈。"""
+
+    def __init__(self, master, text, command, kind="primary", height=34, padx=18,
+                 font=None, bg=C_CARD, **kw):
+        font = font or (FONT, 10)
+        w = tkfont.Font(font=font).measure(text) + padx * 2
+        super().__init__(master, width=w, height=height, bg=bg,
+                         highlightthickness=0, bd=0, cursor="hand2", **kw)
+        self.text = text
+        self.command = command
+        self.kind = kind
+        self.font = font
+        self.height = height
+        self.radius = height // 2
+        self._hover = False
+        self._pressed = False
+        self._selected = False
+        self._brand = None
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self._draw()
+
+    def _set_hover(self, v):
+        self._hover = v
+        self._draw()
+
+    def _on_press(self, e):
+        self._pressed = True
+        self._draw()
+
+    def _on_release(self, e):
+        was = self._pressed
+        self._pressed = False
+        self._draw()
+        if was and self.command:
+            self.command()
+
+    def set_selected(self, sel, brand=None):
+        self._selected = sel
+        self._brand = brand
+        self._draw()
+
+    def _colors(self):
+        if self._selected and self._brand:
+            return self._brand[0], self._brand[1], "#ffffff", ""
+        s = BTN_STYLES[self.kind]
+        top = s["fill"]
+        bottom = s.get("grad", s["fill"])
+        fg = s["fg"]
+        border = s.get("border", "")
+        if self._pressed:
+            top = bottom = s.get("press", s["fill"])
+        elif self._hover:
+            top = bottom = s.get("hover", s["fill"])
+        return top, bottom, fg, border
+
+    def _draw(self):
+        self.delete("all")
+        w = self.winfo_width()
+        if w <= 1:
+            w = int(self["width"])
+        top, bottom, fg, border = self._colors()
+        if top != bottom:
+            _draw_gradient_rounded(self, 0, 0, w, self.height, self.radius, top, bottom)
+        else:
+            _draw_rounded(self, 0, 0, w, self.height, self.radius, fill=top)
+        if border:
+            _draw_rounded(self, 0, 0, w, self.height, self.radius, fill="", outline=border, width=1)
+        self.create_text(w / 2, self.height / 2, text=self.text, fill=fg, font=self.font)
 
 
 def load_contacts():
@@ -118,8 +280,8 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title("信息发送助手")
-        root.geometry("980x720")
-        root.minsize(900, 640)
+        root.geometry("980x780")
+        root.minsize(920, 700)
         root.configure(bg=C_BG)
         self.all_contacts = load_contacts()
         self.current_platform = PLATFORM_NAMES[0]   # 默认微信
@@ -132,36 +294,26 @@ class App:
         return (FONT, size, weight)
 
     def _card(self, parent, padx=18, pady=16):
-        """白色圆角卡片容器（tkinter 无圆角，用白底 + 极淡描边模拟）。"""
-        return tk.Frame(parent, bg=C_CARD, highlightbackground=C_BORDER,
-                        highlightthickness=1, padx=padx, pady=pady)
+        """白色圆角卡片（Canvas 画圆角 + 柔和投影）。"""
+        return RoundedCard(parent, padx=padx, pady=pady)
 
     def _label(self, parent, text, size=10, color=C_SUB, weight="normal", **kw):
         return tk.Label(parent, text=text, font=self._f(size, weight), fg=color, bg=C_CARD, **kw)
 
     def _card_title(self, card, text, sub=None):
         """卡片标题：左侧蓝色竖条 + 标题 + 右侧可选副标题。"""
-        bar = tk.Frame(card, bg=C_CARD)
-        bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        dot = tk.Frame(bar, bg=C_ACCENT, width=3, height=14)
+        bar = tk.Frame(card.body, bg=C_CARD)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        dot = tk.Frame(bar, bg=C_ACCENT, width=4, height=16)
         dot.pack_propagate(False)
-        dot.pack(side="left", padx=(0, 8))
-        tk.Label(bar, text=text, font=self._f(12, "bold"), fg=C_TEXT, bg=C_CARD).pack(side="left")
+        dot.pack(side="left", padx=(0, 9))
+        tk.Label(bar, text=text, font=self._f(13, "bold"), fg=C_TEXT, bg=C_CARD).pack(side="left")
         if sub:
             tk.Label(bar, text=sub, font=self._f(9), fg=C_SUB, bg=C_CARD).pack(side="right")
         return bar
 
     def _button(self, parent, text, command, kind="primary", width=None):
-        styles = {
-            "primary":   dict(bg=C_ACCENT, fg="#ffffff", activebackground=C_ACCENT_HOVER, activeforeground="#ffffff"),
-            "secondary": dict(bg="#e8f1fc", fg=C_ACCENT, activebackground="#d8e9fb", activeforeground=C_ACCENT),
-            "ghost":     dict(bg=C_CARD, fg=C_TEXT, activebackground=C_BG, activeforeground=C_TEXT),
-            "danger":    dict(bg=C_CARD, fg=C_DANGER, activebackground=C_DANGER_BG, activeforeground=C_DANGER),
-        }
-        s = styles[kind]
-        return tk.Button(parent, text=text, command=command, font=self._f(10),
-                         relief="flat", bd=0, highlightthickness=0, cursor="hand2",
-                         takefocus=0, padx=16, pady=7, width=width, **s)
+        return PillButton(parent, text=text, command=command, kind=kind)
 
     def _entry(self, parent, width=None, **kw):
         return tk.Entry(parent, font=self._f(11), relief="flat", bd=0, highlightthickness=1,
@@ -173,61 +325,81 @@ class App:
         root = self.root
         root.grid_columnconfigure(0, weight=1)
         root.grid_columnconfigure(1, weight=1)
-        root.grid_rowconfigure(1, weight=1, minsize=260)
+        root.grid_rowconfigure(2, weight=1, minsize=260)
 
+        self._build_header()
         self._build_content_card()
         self._build_left_card()
         self._build_right_card()
         self._build_log_card()
 
+    def _build_header(self):
+        """顶部渐变横幅：应用名 + 副标题 + 版本号。"""
+        h = tk.Frame(self.root, bg=C_BG)
+        h.grid(row=0, column=0, columnspan=2, sticky="ew", padx=24, pady=(16, 8))
+        cv = tk.Canvas(h, bg=C_BG, height=86, highlightthickness=0, bd=0)
+        cv.pack(fill="x")
+
+        def draw(e=None):
+            w = cv.winfo_width()
+            if w < 10:
+                return
+            cv.delete("all")
+            _draw_gradient_rounded(cv, 0, 2, w, 84, 16, "#3b82f6", "#6a5cff")
+            cv.create_text(26, 30, anchor="w", text="信息发送助手",
+                           fill="#ffffff", font=(FONT, 19, "bold"))
+            cv.create_text(26, 56, anchor="w", text="微信 / QQ · 批量群发 · 定时发送 · 文件消息",
+                           fill="#e8ecff", font=(FONT, 10))
+            cv.create_text(w - 26, 44, anchor="e", text="v1.3",
+                           fill="#ffffff", font=(FONT, 12, "bold"))
+
+        cv.bind("<Configure>", draw)
+        draw()
+
     def _refresh_platform_buttons(self):
         for p, b in self.platform_btns.items():
             selected = (p == self.current_platform)
-            b.configure(bg=C_ACCENT if selected else "#e8e8ed",
-                        fg="#ffffff" if selected else C_TEXT,
-                        activebackground=C_ACCENT if selected else "#dcdce1",
-                        activeforeground="#ffffff" if selected else C_TEXT)
+            b.set_selected(selected, PLATFORM_BRAND.get(p))
 
     def _build_content_card(self):
         card = self._card(self.root)
-        card.grid(row=0, column=0, columnspan=2, sticky="ew", padx=24, pady=(16, 8))
-        card.grid_columnconfigure(0, weight=1)
+        card.grid(row=1, column=0, columnspan=2, sticky="ew", padx=24, pady=8)
+        card.body.grid_columnconfigure(0, weight=1)
 
         # 标题行：左侧标题 + 右侧平台切换
-        head = tk.Frame(card, bg=C_CARD)
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        dot = tk.Frame(head, bg=C_ACCENT, width=3, height=14)
+        head = tk.Frame(card.body, bg=C_CARD)
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        dot = tk.Frame(head, bg=C_ACCENT, width=4, height=16)
         dot.pack_propagate(False)
-        dot.pack(side="left", padx=(0, 8))
-        tk.Label(head, text="发送内容", font=self._f(12, "bold"), fg=C_TEXT, bg=C_CARD).pack(side="left")
+        dot.pack(side="left", padx=(0, 9))
+        tk.Label(head, text="发送内容", font=self._f(13, "bold"), fg=C_TEXT, bg=C_CARD).pack(side="left")
 
-        seg = tk.Frame(head, bg="#e8e8ed", padx=3, pady=3)
+        seg = tk.Frame(head, bg="#eef0f4", padx=3, pady=3)
         seg.pack(side="right")
         self.platform_btns = {}
         for p in PLATFORM_NAMES:
-            b = tk.Button(seg, text=p, font=self._f(10), relief="flat", bd=0,
-                          highlightthickness=0, cursor="hand2", takefocus=0, padx=18, pady=4,
-                          command=lambda name=p: self._set_platform(name))
+            b = PillButton(seg, text=p, command=lambda name=p: self._set_platform(name),
+                           kind="seg", bg="#eef0f4", height=28, padx=16)
             b.pack(side="left")
             self.platform_btns[p] = b
         self._refresh_platform_buttons()
 
-        self.content_text = tk.Text(card, height=2, font=self._f(11), relief="flat", bd=0,
+        self.content_text = tk.Text(card.body, height=2, font=self._f(11), relief="flat", bd=0,
                                     highlightthickness=1, highlightbackground=C_BORDER,
                                     highlightcolor=C_ACCENT, bg=C_FIELD_BG, fg=C_TEXT,
                                     insertbackground=C_TEXT, padx=10, pady=8, wrap="word")
         self.content_text.grid(row=1, column=0, sticky="ew")
 
-        rowf = tk.Frame(card, bg=C_CARD)
-        rowf.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        rowf = tk.Frame(card.body, bg=C_CARD)
+        rowf.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         self._label(rowf, "文件", size=10).pack(side="left")
         self.file_entry = self._entry(rowf)
         self.file_entry.pack(side="left", fill="x", expand=True, padx=(6, 8))
         self._button(rowf, "选择文件", self.pick_file, "secondary").pack(side="left")
         self._button(rowf, "清除", self.clear_file, "ghost").pack(side="left", padx=(6, 0))
 
-        row2 = tk.Frame(card, bg=C_CARD)
-        row2.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        row2 = tk.Frame(card.body, bg=C_CARD)
+        row2.grid(row=3, column=0, sticky="ew", pady=(12, 0))
 
         self._label(row2, "日期 MM-DD(可选)", size=10).pack(side="left")
         self.date_entry = self._entry(row2, width=8)
@@ -245,57 +417,57 @@ class App:
 
     def _build_left_card(self):
         card = self._card(self.root)
-        card.grid(row=1, column=0, sticky="nsew", padx=(24, 8), pady=8)
-        card.grid_rowconfigure(1, weight=1)
-        card.grid_columnconfigure(0, weight=1)
+        card.grid(row=2, column=0, sticky="nsew", padx=(24, 8), pady=8)
+        card.body.grid_rowconfigure(1, weight=1)
+        card.body.grid_columnconfigure(0, weight=1)
 
         self._card_title(card, "通讯录", "Ctrl + 点击 多选")
 
-        self.listbox = tk.Listbox(card, selectmode=tk.EXTENDED, exportselection=False,
+        self.listbox = tk.Listbox(card.body, selectmode=tk.EXTENDED, exportselection=False,
                                   font=self._f(11), relief="flat", bd=0, highlightthickness=0,
                                   bg=C_FIELD_BG, fg=C_TEXT, selectbackground=C_ACCENT,
                                   selectforeground="#ffffff", activestyle="none")
         self.listbox.grid(row=1, column=0, sticky="nsew")
 
-        addf = tk.Frame(card, bg=C_CARD)
-        addf.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        addf = tk.Frame(card.body, bg=C_CARD)
+        addf.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         addf.grid_columnconfigure(0, weight=1)
         self.entry_new = self._entry(addf)
         self.entry_new.grid(row=0, column=0, sticky="ew")
         self.entry_new.bind("<Return>", lambda e: self.add_contact())
-        self._button(addf, "添加", self.add_contact, "secondary", width=6).grid(row=0, column=1, padx=(8, 0))
+        self._button(addf, "添加", self.add_contact, "secondary").grid(row=0, column=1, padx=(8, 0))
 
-        self._button(card, "删除选中联系人", self.del_contact, "danger").grid(
-            row=3, column=0, sticky="ew", pady=(8, 0))
+        self._button(card.body, "删除选中联系人", self.del_contact, "danger").grid(
+            row=3, column=0, sticky="ew", pady=(10, 0))
 
     def _build_right_card(self):
         card = self._card(self.root)
-        card.grid(row=1, column=1, sticky="nsew", padx=(8, 24), pady=8)
-        card.grid_rowconfigure(1, weight=1)
-        card.grid_columnconfigure(0, weight=1)
+        card.grid(row=2, column=1, sticky="nsew", padx=(8, 24), pady=8)
+        card.body.grid_rowconfigure(1, weight=1)
+        card.body.grid_columnconfigure(0, weight=1)
 
         self._card_title(card, "任务", "选中后操作")
 
-        self.task_listbox = tk.Listbox(card, exportselection=False, font=self._f(11),
+        self.task_listbox = tk.Listbox(card.body, exportselection=False, font=self._f(11),
                                        relief="flat", bd=0, highlightthickness=0,
                                        bg=C_FIELD_BG, fg=C_TEXT, selectbackground=C_ACCENT,
                                        selectforeground="#ffffff", activestyle="none")
         self.task_listbox.grid(row=1, column=0, sticky="nsew")
 
-        btns = tk.Frame(card, bg=C_CARD)
-        btns.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        btns = tk.Frame(card.body, bg=C_CARD)
+        btns.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         self._button(btns, "暂停/继续", self.toggle_pause, "ghost").pack(side="left")
         self._button(btns, "载入编辑", self.load_edit, "ghost").pack(side="left", padx=(8, 0))
         self._button(btns, "删除任务", self.delete_task, "danger").pack(side="left", padx=(8, 0))
 
     def _build_log_card(self):
         card = self._card(self.root, pady=12)
-        card.grid(row=2, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 20))
-        card.grid_columnconfigure(0, weight=1)
+        card.grid(row=3, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 18))
+        card.body.grid_columnconfigure(0, weight=1)
 
         self._card_title(card, "日志")
         self.log_text = scrolledtext.ScrolledText(
-            card, height=3, font=self._f(10), relief="flat", bd=0,
+            card.body, height=3, font=self._f(10), relief="flat", bd=0,
             highlightthickness=0, bg=C_FIELD_BG, fg=C_TEXT, padx=10, pady=8, wrap="word")
         self.log_text.grid(row=1, column=0, sticky="ew")
         self.log_text.configure(state="disabled")
@@ -343,8 +515,10 @@ class App:
     # ---------- 任务 ----------
     def _refresh_tasks(self):
         self.task_listbox.delete(0, tk.END)
-        for tid in sorted(self.tasks):
-            self.task_listbox.insert(tk.END, self.tasks[tid].label())
+        for i, tid in enumerate(sorted(self.tasks)):
+            t = self.tasks[tid]
+            self.task_listbox.insert(tk.END, t.label())
+            self.task_listbox.itemconfig(i, fg=STATUS_COLOR.get(t.status, C_TEXT))
 
     def _selected_task(self):
         sel = self.task_listbox.curselection()
