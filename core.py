@@ -18,10 +18,14 @@ pyautogui.PAUSE = 0.1
 # 若实测发现 QQ 有其它差异（搜索方式/进会话方式），在这里单独加配置项。
 PLATFORMS = {
     # result_wait = 粘贴名字后，等搜索结果出现的秒数。微信约 0.3s；QQ 约 0.9s（等不到就回车会进错页）。
-    "微信": {"title": "微信", "open_search": "hotkey", "search_offset": None,  "result_wait": 0.3},
+    # file_paste_wait = 粘贴文件后，等附件加载的秒数；file_send_wait = 回车后等发送完成的秒数。
+    # QQ 响应比微信慢，两个等待都加长，避免「附件没加载好就回车」导致漏发。
+    "微信": {"title": "微信", "open_search": "hotkey", "search_offset": None,  "result_wait": 0.3,
+             "file_paste_wait": 1.2, "file_send_wait": 0.5},
     # QQ 没有可靠的搜索快捷键（脚本模拟 Ctrl+F 不触发），改用「点击顶部搜索框」。
     # search_offset = 搜索框中心相对窗口左上角的偏移(像素)，窗口移动/最大化都按此相对位置算。
-    "QQ":   {"title": "QQ",   "open_search": "click",  "search_offset": (202, 83), "result_wait": 0.9},
+    "QQ":   {"title": "QQ",   "open_search": "click",  "search_offset": (202, 83), "result_wait": 0.9,
+             "file_paste_wait": 1.8, "file_send_wait": 0.8},
 }
 
 
@@ -166,23 +170,37 @@ def copy_file_to_clipboard(path):
         user32.CloseClipboard()
 
 
+def _try_send_file(file_path, cfg):
+    """粘贴文件附件并回车发送，返回「输入框已清空」检测结果（True=成功）。
+
+    检测靠 _verify_sent：发送后输入框空→成功；仍残留附件→判失败。
+    注意：文件附件的检测不如文字可靠（附件非文本，复制可能取不到），
+    因此失败时靠外层重试 + 加长等待兜底，不能保证 100% 准确。
+    """
+    copy_file_to_clipboard(file_path)
+    time.sleep(0.3)
+    pyautogui.hotkey("ctrl", "v")   # 粘贴成文件附件（不走 _paste，避免覆盖剪贴板）
+    time.sleep(cfg.get("file_paste_wait", 1.2))   # 等附件加载
+    _press_enter()                                  # 发送文件
+    time.sleep(cfg.get("file_send_wait", 0.5))
+    return _verify_sent()
+
+
 def send_one(name, content, interval=1.5, cfg=None, file_path=None):
     """给单个对象发一条消息（文字 / 文件 / 文字+文件），返回是否发送成功。"""
     cfg = cfg or PLATFORMS["微信"]
     _search_and_enter(name, cfg)
+    ok = True
     if content:
         _paste(content)
         time.sleep(0.3)
         _press_enter()              # 发送文字
         time.sleep(0.35)
+        ok = _verify_sent()
     if file_path:
-        copy_file_to_clipboard(file_path)
-        time.sleep(0.3)
-        pyautogui.hotkey("ctrl", "v")   # 粘贴成文件附件（不走 _paste，避免覆盖剪贴板）
-        time.sleep(1.2)                  # 等附件加载
-        _press_enter()                   # 发送文件
-        time.sleep(0.5)
-    ok = _verify_sent() if (content and not file_path) else True
+        ok = _try_send_file(file_path, cfg)
+        if not ok:                  # 检测到可能失败，重试一次
+            ok = _try_send_file(file_path, cfg)
     time.sleep(interval)
     return ok
 
