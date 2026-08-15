@@ -4,8 +4,10 @@
 运行方式：python main.py
 界面风格：仿苹果官网 —— 浅灰底、白色卡片、苹果蓝强调色、大量留白。
 """
+import datetime
 import json
 import os
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
@@ -13,8 +15,18 @@ from tkinter import messagebox, scrolledtext
 import core
 import scheduler
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 打包成 exe 后 __file__ 指向临时解压目录，联系人/图标要放 exe 同目录，改用 sys.executable 定位
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTACTS_FILE = os.path.join(BASE_DIR, "contacts.json")
+
+
+def resource_path(rel):
+    """资源文件（图标等）路径：打包后从 PyInstaller 解压目录读取。"""
+    base = getattr(sys, "_MEIPASS", BASE_DIR)
+    return os.path.join(base, rel)
 
 STATUS_TEXT = {
     "running": "进行中", "paused": "已暂停", "waiting": "等待定时",
@@ -66,7 +78,8 @@ def save_contacts(all_contacts):
 class Task:
     _next_id = 1
 
-    def __init__(self, names, content, platform="微信", hour=None, minute=None, interval=1.5):
+    def __init__(self, names, content, platform="微信", hour=None, minute=None, interval=1.5,
+                 month=None, day=None):
         self.id = Task._next_id
         Task._next_id += 1
         self.names = list(names)
@@ -74,6 +87,8 @@ class Task:
         self.platform = platform
         self.hour = hour
         self.minute = minute
+        self.month = month
+        self.day = day
         self.interval = interval
         self.controller = core.SendController()
         self.status = "waiting" if hour is not None else "running"
@@ -86,7 +101,12 @@ class Task:
     def label(self):
         st = STATUS_TEXT.get(self.status, self.status)
         preview = self.content.replace("\n", " ")[:14]
-        timeinfo = f" @ {self.hour:02d}:{self.minute:02d}" if self.hour is not None else ""
+        timeinfo = ""
+        if self.hour is not None:
+            if self.month is not None:
+                timeinfo = f" @ {self.month:02d}-{self.day:02d} {self.hour:02d}:{self.minute:02d}"
+            else:
+                timeinfo = f" @ {self.hour:02d}:{self.minute:02d}"
         return f"任务{self.id} [{self.platform}·{st}] {self.done}/{self.total}{timeinfo} - {preview}"
 
 
@@ -199,7 +219,10 @@ class App:
 
         self._label(row2, "定时 HH:MM", size=10).pack(side="left")
         self.time_entry = self._entry(row2, width=7)
-        self.time_entry.pack(side="left", padx=(6, 16))
+        self.time_entry.pack(side="left", padx=(6, 12))
+        self._label(row2, "日期 MM-DD(可选)", size=10).pack(side="left")
+        self.date_entry = self._entry(row2, width=8)
+        self.date_entry.pack(side="left", padx=(6, 12))
         self._label(row2, "间隔(秒)", size=10).pack(side="left")
         self.interval_entry = self._entry(row2, width=5)
         self.interval_entry.insert(0, "1.5")
@@ -342,13 +365,19 @@ class App:
         except Exception:
             return 1.5
 
-    def _create_task(self, names, content, hour, minute, interval):
+    def _create_task(self, names, content, hour, minute, interval, month=None, day=None):
         task = Task(names, content, platform=self.current_platform,
-                    hour=hour, minute=minute, interval=interval)
+                    hour=hour, minute=minute, interval=interval, month=month, day=day)
         self.tasks[task.id] = task
         self._refresh_tasks()
         self.log("=" * 40)
-        when = f"定时 {hour:02d}:{minute:02d}" if hour is not None else "立即"
+        if hour is not None:
+            if month is not None:
+                when = f"定时 {month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+            else:
+                when = f"定时 {hour:02d}:{minute:02d}（若已过则顺延到明天）"
+        else:
+            when = "立即"
         self.log(f"任务{task.id} 已创建：[{self.current_platform}] {len(names)} 人，{when}，间隔 {interval} 秒")
         return task
 
@@ -377,7 +406,8 @@ class App:
     def _start_task(self, task):
         if task.hour is not None:
             def wait_then_run():
-                if scheduler.wait_until(task.hour, task.minute, controller=task.controller):
+                if scheduler.wait_until(task.hour, task.minute, controller=task.controller,
+                                        month=task.month, day=task.day):
                     if task.controller.cancelled:
                         return
                     task.status = "running"
@@ -440,6 +470,9 @@ class App:
         self.time_entry.delete(0, tk.END)
         if task.hour is not None:
             self.time_entry.insert(0, f"{task.hour:02d}:{task.minute:02d}")
+        self.date_entry.delete(0, tk.END)
+        if task.month is not None:
+            self.date_entry.insert(0, f"{task.month:02d}-{task.day:02d}")
         self.interval_entry.delete(0, tk.END)
         self.interval_entry.insert(0, str(task.interval))
         # 移除旧任务
@@ -459,7 +492,7 @@ class App:
             messagebox.showwarning("提示", "请填写发送内容")
             return None
         interval = self._get_interval()
-        hour = minute = None
+        hour = minute = month = day = None
         t = self.time_entry.get().strip()
         if require_time or t:
             if not t:
@@ -473,29 +506,45 @@ class App:
             except Exception:
                 messagebox.showwarning("提示", "时间格式错误，请用 HH:MM，例如 23:30")
                 return None
-        return names, content, hour, minute, interval
+        # 日期（可选）：MM-DD，不填则默认「最近的未来时刻」
+        d = self.date_entry.get().strip()
+        if d:
+            if hour is None:
+                messagebox.showwarning("提示", "填了日期就必须同时填时间（HH:MM）")
+                return None
+            try:
+                s = d.replace("/", "-").replace("月", "-").replace("日", "")
+                parts = [int(x) for x in s.split("-") if x.strip() != ""]
+                if len(parts) != 2:
+                    raise ValueError
+                month, day = parts
+                datetime.date(2024, month, day)   # 2024 闰年，能校验 2-29 及所有无效月日
+            except Exception:
+                messagebox.showwarning("提示", "日期格式错误，请用 MM-DD，例如 08-16")
+                return None
+        return names, content, hour, minute, interval, month, day
 
     def send_now(self):
         r = self._collect(require_time=False)
         if not r:
             return
-        names, content, hour, minute, interval = r
-        task = self._create_task(names, content, hour, minute, interval)
+        names, content, hour, minute, interval, month, day = r
+        task = self._create_task(names, content, hour, minute, interval, month, day)
         self._start_task(task)
 
     def send_later(self):
         r = self._collect(require_time=True)
         if not r:
             return
-        names, content, hour, minute, interval = r
-        task = self._create_task(names, content, hour, minute, interval)
+        names, content, hour, minute, interval, month, day = r
+        task = self._create_task(names, content, hour, minute, interval, month, day)
         self._start_task(task)
         self.log("⚠ 到点前请保持程序运行、电脑不睡眠、不合盖、微信/QQ 登录在线")
 
 
 def main():
     root = tk.Tk()
-    icon = os.path.join(BASE_DIR, "app_icon.ico")
+    icon = resource_path("app_icon.ico")
     if os.path.exists(icon):
         try:
             root.iconbitmap(icon)
