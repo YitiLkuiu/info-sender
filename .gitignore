@@ -8,3 +8,12 @@ contacts.json
 
 # 本地启动脚本（含本机 D 盘路径，不上传）
 *.bat
+
+# 构建产物（不进 git，安装包走 Releases）
+build/
+dist/
+output/
+*.spec
+
+# 旧名安装残留（测试时装到了项目目录）
+群发助手/

@@ -113,7 +113,7 @@ class Task:
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("群发助手")
+        root.title("信息发送助手")
         root.geometry("980x720")
         root.minsize(900, 640)
         root.configure(bg=C_BG)
