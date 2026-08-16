@@ -312,8 +312,8 @@ class App:
             tk.Label(bar, text=sub, font=self._f(9), fg=C_SUB, bg=C_CARD).pack(side="right")
         return bar
 
-    def _button(self, parent, text, command, kind="primary", width=None):
-        return PillButton(parent, text=text, command=command, kind=kind)
+    def _button(self, parent, text, command, kind="primary", width=None, **kw):
+        return PillButton(parent, text=text, command=command, kind=kind, **kw)
 
     def _entry(self, parent, width=None, **kw):
         return tk.Entry(parent, font=self._f(11), relief="flat", bd=0, highlightthickness=1,
@@ -350,7 +350,7 @@ class App:
                            fill="#ffffff", font=(FONT, 19, "bold"))
             cv.create_text(26, 56, anchor="w", text="微信 / QQ · 批量群发 · 定时发送 · 文件消息",
                            fill="#e8ecff", font=(FONT, 10))
-            cv.create_text(w - 26, 44, anchor="e", text="v1.3",
+            cv.create_text(w - 26, 44, anchor="e", text="v1.4",
                            fill="#ffffff", font=(FONT, 12, "bold"))
 
         cv.bind("<Configure>", draw)
@@ -372,7 +372,7 @@ class App:
         dot = tk.Frame(head, bg=C_ACCENT, width=4, height=16)
         dot.pack_propagate(False)
         dot.pack(side="left", padx=(0, 9))
-        tk.Label(head, text="发送内容", font=self._f(13, "bold"), fg=C_TEXT, bg=C_CARD).pack(side="left")
+        tk.Label(head, text="📋 发送内容", font=self._f(13, "bold"), fg=C_TEXT, bg=C_CARD).pack(side="left")
 
         seg = tk.Frame(head, bg="#eef0f4", padx=3, pady=3)
         seg.pack(side="right")
@@ -392,7 +392,7 @@ class App:
 
         rowf = tk.Frame(card.body, bg=C_CARD)
         rowf.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        self._label(rowf, "文件", size=10).pack(side="left")
+        self._label(rowf, "📁 文件", size=10).pack(side="left")
         self.file_entry = self._entry(rowf)
         self.file_entry.pack(side="left", fill="x", expand=True, padx=(6, 8))
         self._button(rowf, "选择文件", self.pick_file, "secondary").pack(side="left")
@@ -401,13 +401,16 @@ class App:
         row2 = tk.Frame(card.body, bg=C_CARD)
         row2.grid(row=3, column=0, sticky="ew", pady=(12, 0))
 
-        self._label(row2, "日期 MM-DD(可选)", size=10).pack(side="left")
-        self.date_entry = self._entry(row2, width=8)
-        self.date_entry.pack(side="left", padx=(6, 12))
-        self._label(row2, "定时 HH:MM", size=10).pack(side="left")
+        self._label(row2, "📅 日期(可选)", size=10).pack(side="left")
+        self.date_entry = self._entry(row2, width=9)
+        self.date_entry.pack(side="left", padx=(6, 4))
+        self.date_entry.config(cursor="hand2")
+        self.date_entry.bind("<Button-1>", lambda e: self._pick_date())
+        self._button(row2, "选择", self._pick_date, "secondary", height=28, padx=12).pack(side="left")
+        self._label(row2, "🕐 定时", size=10).pack(side="left", padx=(12, 0))
         self.time_entry = self._entry(row2, width=7)
         self.time_entry.pack(side="left", padx=(6, 12))
-        self._label(row2, "间隔(秒)", size=10).pack(side="left")
+        self._label(row2, "⏱ 间隔(秒)", size=10).pack(side="left")
         self.interval_entry = self._entry(row2, width=5)
         self.interval_entry.insert(0, "1.5")
         self.interval_entry.pack(side="left", padx=(6, 0))
@@ -421,7 +424,7 @@ class App:
         card.body.grid_rowconfigure(1, weight=1)
         card.body.grid_columnconfigure(0, weight=1)
 
-        self._card_title(card, "通讯录", "Ctrl + 点击 多选")
+        self._card_title(card, "👥 通讯录", "Ctrl + 点击 多选")
 
         self.listbox = tk.Listbox(card.body, selectmode=tk.EXTENDED, exportselection=False,
                                   font=self._f(11), relief="flat", bd=0, highlightthickness=0,
@@ -446,7 +449,7 @@ class App:
         card.body.grid_rowconfigure(1, weight=1)
         card.body.grid_columnconfigure(0, weight=1)
 
-        self._card_title(card, "任务", "选中后操作")
+        self._card_title(card, "📦 任务", "选中后操作")
 
         self.task_listbox = tk.Listbox(card.body, exportselection=False, font=self._f(11),
                                        relief="flat", bd=0, highlightthickness=0,
@@ -465,7 +468,7 @@ class App:
         card.grid(row=3, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 18))
         card.body.grid_columnconfigure(0, weight=1)
 
-        self._card_title(card, "日志")
+        self._card_title(card, "📜 日志")
         self.log_text = scrolledtext.ScrolledText(
             card.body, height=3, font=self._f(10), relief="flat", bd=0,
             highlightthickness=0, bg=C_FIELD_BG, fg=C_TEXT, padx=10, pady=8, wrap="word")
@@ -552,6 +555,91 @@ class App:
 
     def clear_file(self):
         self.file_entry.delete(0, tk.END)
+
+    def _pick_date(self):
+        """弹出日历窗口选日期，选中后填回 date_entry（格式 MM-DD）。"""
+        import calendar as _cal
+        now = datetime.datetime.now()
+        y, m = now.year, now.month
+
+        # 若已选过月份，定位到该月；否则默认当前月
+        cur = self.date_entry.get().strip()
+        if cur:
+            try:
+                parts = [int(x) for x in cur.replace("/", "-").split("-") if x.strip()]
+                if len(parts) == 2:
+                    m = parts[0]
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self.root)
+        win.title("选择日期")
+        win.configure(bg=C_BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+        bar = tk.Frame(win, bg=C_BG)
+        bar.pack(padx=12, pady=(12, 4))
+        prev = PillButton(bar, text="‹ 上月", command=None, kind="ghost", height=26, padx=10, bg=C_BG)
+        prev.pack(side="left")
+        month_label = tk.Label(bar, text="", font=self._f(12, "bold"), fg=C_TEXT, bg=C_BG, width=12)
+        month_label.pack(side="left", padx=10)
+        nxt = PillButton(bar, text="下月 ›", command=None, kind="ghost", height=26, padx=10, bg=C_BG)
+        nxt.pack(side="left")
+
+        week_row = tk.Frame(win, bg=C_BG)
+        week_row.pack(padx=12, pady=(4, 0))
+        for i, wd in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
+            tk.Label(week_row, text=wd, font=self._f(9), fg=C_SUB, bg=C_BG, width=3).grid(row=0, column=i, padx=2)
+
+        grid = tk.Frame(win, bg=C_BG)
+        grid.pack(padx=12, pady=4)
+
+        def choose(d):
+            self.date_entry.delete(0, tk.END)
+            self.date_entry.insert(0, f"{m:02d}-{d:02d}")
+            win.destroy()
+
+        def render():
+            for wdg in grid.winfo_children():
+                wdg.destroy()
+            month_label.config(text=f"{y} 年 {m} 月")
+            for r, week in enumerate(_cal.monthcalendar(y, m)):
+                for c, day in enumerate(week):
+                    if day == 0:
+                        tk.Label(grid, text="", bg=C_BG, width=3).grid(row=r, column=c, padx=2, pady=2)
+                    else:
+                        tk.Button(grid, text=str(day), font=self._f(10), relief="flat", bd=0,
+                                  bg=C_CARD, fg=C_TEXT, activebackground=C_ACCENT,
+                                  activeforeground="#ffffff", cursor="hand2", width=3,
+                                  highlightthickness=1, highlightbackground=C_BORDER,
+                                  command=lambda d=day: choose(d)).grid(row=r, column=c, padx=2, pady=2)
+
+        def go(delta):
+            nonlocal y, m
+            m += delta
+            if m < 1:
+                y -= 1
+                m = 12
+            elif m > 12:
+                y += 1
+                m = 1
+            render()
+
+        prev.command = lambda: go(-1)
+        nxt.command = lambda: go(1)
+
+        footer = tk.Frame(win, bg=C_BG)
+        footer.pack(padx=12, pady=(4, 12), fill="x")
+        PillButton(footer, text="清除日期",
+                   command=lambda: (self.date_entry.delete(0, tk.END), win.destroy()),
+                   kind="danger", height=26, padx=12).pack(side="right")
+
+        render()
 
     def _get_interval(self):
         try:
