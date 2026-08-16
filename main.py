@@ -212,6 +212,76 @@ class PillButton(tk.Canvas):
         self.create_text(w / 2, self.height / 2, text=self.text, fill=fg, font=self.font)
 
 
+class WheelPicker(tk.Frame):
+    """单列滚轮选择器（手机闹钟式）：中间值高亮，滚轮/点击/箭头切换，循环滚动。"""
+
+    ROW_H = 28            # 每行高度
+    VISIBLE = 5           # 可见行数（当前值居中）
+
+    def __init__(self, master, values, index=0, bg=C_BG, width=64, **kw):
+        super().__init__(master, bg=bg, **kw)
+        self.values = list(values)
+        self.index = index % len(self.values)
+        self.bg = bg
+        self.width = width
+        self.height = self.VISIBLE * self.ROW_H
+
+        self._up = tk.Label(self, text="▲", font=(FONT, 9), fg=C_SUB, bg=bg, cursor="hand2")
+        self._up.pack(fill="x")
+        self._up.bind("<Button-1>", lambda e: self._scroll(-1))
+
+        self.cv = tk.Canvas(self, width=width, height=self.height, bg=C_CARD,
+                            highlightthickness=0, bd=0, cursor="hand2")
+        self.cv.pack()
+
+        self._down = tk.Label(self, text="▼", font=(FONT, 9), fg=C_SUB, bg=bg, cursor="hand2")
+        self._down.pack(fill="x")
+        self._down.bind("<Button-1>", lambda e: self._scroll(1))
+
+        for w in (self, self._up, self._down, self.cv):
+            w.bind("<MouseWheel>", self._on_wheel)
+        self.cv.bind("<Button-1>", self._on_click)
+
+        self._draw()
+
+    def _on_wheel(self, e):
+        step = -e.delta // 120
+        if step == 0:
+            step = -1 if e.delta > 0 else 1
+        self._scroll(step)
+
+    def _on_click(self, e):
+        self._scroll(-1 if e.y < self.height / 2 else 1)
+
+    def _scroll(self, delta):
+        self.index = (self.index + delta) % len(self.values)
+        self._draw()
+
+    def get(self):
+        return self.values[self.index]
+
+    def _draw(self):
+        self.cv.delete("all")
+        n = len(self.values)
+        cx = self.width / 2
+        half = self.VISIBLE // 2
+        for row in range(self.VISIBLE):
+            offset = row - half                 # -2..2
+            idx = (self.index + offset) % n
+            y = row * self.ROW_H + self.ROW_H / 2
+            if offset == 0:
+                top = row * self.ROW_H
+                self.cv.create_rectangle(0, top, self.width, top + self.ROW_H, fill="#eaf1fe", outline="")
+                self.cv.create_line(0, top, self.width, top, fill=C_BORDER)
+                self.cv.create_line(0, top + self.ROW_H, self.width, top + self.ROW_H, fill=C_BORDER)
+                fg, font = C_TEXT, (FONT, 14, "bold")
+            elif abs(offset) == 1:
+                fg, font = C_SUB, (FONT, 11)
+            else:
+                fg, font = "#b0b5c0", (FONT, 9)
+            self.cv.create_text(cx, y, text=self.values[idx], fill=fg, font=font)
+
+
 def load_contacts():
     """读取通讯录，返回 {"微信": [...], "QQ": [...]}。兼容旧的纯列表格式。"""
     empty = {p: [] for p in PLATFORM_NAMES}
@@ -350,7 +420,7 @@ class App:
                            fill="#ffffff", font=(FONT, 19, "bold"))
             cv.create_text(26, 56, anchor="w", text="微信 / QQ · 批量群发 · 定时发送 · 文件消息",
                            fill="#e8ecff", font=(FONT, 10))
-            cv.create_text(w - 26, 44, anchor="e", text="v1.4",
+            cv.create_text(w - 26, 44, anchor="e", text="v1.5",
                            fill="#ffffff", font=(FONT, 12, "bold"))
 
         cv.bind("<Configure>", draw)
@@ -408,9 +478,12 @@ class App:
         self.date_entry.bind("<Button-1>", lambda e: self._pick_date())
         self._button(row2, "选择", self._pick_date, "secondary", height=28, padx=12).pack(side="left")
         self._label(row2, "🕐 定时", size=10).pack(side="left", padx=(12, 0))
-        self.time_entry = self._entry(row2, width=7)
-        self.time_entry.pack(side="left", padx=(6, 12))
-        self._label(row2, "⏱ 间隔(秒)", size=10).pack(side="left")
+        self.time_entry = self._entry(row2, width=9)
+        self.time_entry.pack(side="left", padx=(6, 4))
+        self.time_entry.config(cursor="hand2")
+        self.time_entry.bind("<Button-1>", lambda e: self._pick_time())
+        self._button(row2, "选择", self._pick_time, "secondary", height=28, padx=12).pack(side="left")
+        self._label(row2, "⏱ 间隔(秒)", size=10).pack(side="left", padx=(12, 0))
         self.interval_entry = self._entry(row2, width=5)
         self.interval_entry.insert(0, "1.5")
         self.interval_entry.pack(side="left", padx=(6, 0))
@@ -640,6 +713,53 @@ class App:
                    kind="danger", height=26, padx=12).pack(side="right")
 
         render()
+
+    def _pick_time(self):
+        """弹出手机闹钟式滚轮选时间，填回 time_entry（格式 HH:MM）。"""
+        hh, mm = 8, 0
+        cur = self.time_entry.get().strip()
+        if cur:
+            try:
+                h, mi = cur.split(":")
+                hh, mm = int(h), int(mi)
+                if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                    raise ValueError
+            except Exception:
+                hh, mm = 8, 0
+
+        win = tk.Toplevel(self.root)
+        win.title("选择时间")
+        win.configure(bg=C_BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+        tk.Label(win, text="选择时间", font=self._f(14, "bold"), fg=C_TEXT, bg=C_BG).pack(pady=(14, 6))
+
+        row = tk.Frame(win, bg=C_BG)
+        row.pack(padx=20, pady=4)
+        hours = WheelPicker(row, [f"{i:02d}" for i in range(24)], index=hh)
+        hours.pack(side="left")
+        tk.Label(row, text=":", font=self._f(18, "bold"), fg=C_TEXT, bg=C_BG).pack(side="left", padx=10)
+        minutes = WheelPicker(row, [f"{i:02d}" for i in range(60)], index=mm)
+        minutes.pack(side="left")
+
+        footer = tk.Frame(win, bg=C_BG)
+        footer.pack(padx=20, pady=(6, 14), fill="x")
+
+        def confirm():
+            self.time_entry.delete(0, tk.END)
+            self.time_entry.insert(0, f"{hours.get()}:{minutes.get()}")
+            win.destroy()
+
+        PillButton(footer, text="确定", command=confirm,
+                   kind="primary", height=30, padx=18).pack(side="right")
+        PillButton(footer, text="清除时间",
+                   command=lambda: (self.time_entry.delete(0, tk.END), win.destroy()),
+                   kind="danger", height=30, padx=14).pack(side="right", padx=(8, 0))
 
     def _get_interval(self):
         try:
