@@ -583,7 +583,7 @@ class App:
                            fill="#ffffff", font=(FONT, 19, "bold"))
             cv.create_text(26, 56, anchor="w", text="微信 / QQ · 批量群发 · 定时发送 · 文件消息",
                            fill="#e8ecff", font=(FONT, 10))
-            cv.create_text(w - 26, 44, anchor="e", text="v1.6",
+            cv.create_text(w - 26, 44, anchor="e", text="v1.7",
                            fill="#ffffff", font=(FONT, 12, "bold"))
 
         cv.bind("<Configure>", draw)

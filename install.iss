@@ -1,7 +1,7 @@
 ﻿[Setup]
 AppId={{C8A1F5B2-7D4E-4B9A-8C6D-1E2F3A4B5C6D}
 AppName=信息发送助手
-AppVersion=1.0
+AppVersion=1.7
 AppPublisher=Eton Leeo
 DefaultDirName={localappdata}\Programs\信息发送助手
 DefaultGroupName=信息发送助手

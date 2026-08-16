@@ -24,8 +24,11 @@ PLATFORMS = {
              "file_paste_wait": 1.2, "file_send_wait": 0.5},
     # QQ 没有可靠的搜索快捷键（脚本模拟 Ctrl+F 不触发），改用「点击顶部搜索框」。
     # search_offset = 搜索框中心相对窗口左上角的偏移(像素)，窗口移动/最大化都按此相对位置算。
+    # enter_wait = 回车进入会话后等待的秒数；QQ 比微信慢，且进入后输入框可能没聚焦，
+    #              需要 input_click=True 额外点一下底部输入框，否则粘贴会落空。
     "QQ":   {"title": "QQ",   "open_search": "click",  "search_offset": (202, 83), "result_wait": 0.9,
-             "file_paste_wait": 1.8, "file_send_wait": 0.8},
+             "file_paste_wait": 1.8, "file_send_wait": 0.8,
+             "enter_wait": 1.5, "input_click": True},
 }
 
 
@@ -58,13 +61,47 @@ class SendController:
         self._pause.wait()
 
 
+def _find_window(title):
+    """枚举所有标题匹配的顶层窗口，返回面积最大的那个句柄。
+
+    不能用 FindWindowW(None, title)：QQ 有多个标题同为「QQ」的窗口（主聊天
+    窗口、托盘悬浮窗 32x38、隐藏辅助窗 46x38 等），FindWindowW 返回第一个，
+    可能拿到托盘窗。主聊天窗口无论打开（~1200x800）还是最小化到托盘（被
+    QQ 缩成 159x27 移到屏幕外），面积都是最大的那个，选它即可。
+    """
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    candidates = []
+
+    def _cb(hwnd, _lp):
+        n = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, buf, n + 1)
+        if buf.value != title:
+            return True
+        r = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        w, h = r.right - r.left, r.bottom - r.top
+        candidates.append((w * h, hwnd))
+        return True
+
+    WND = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows(WND(_cb), 0)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: -x[0])
+    return candidates[0][1]
+
+
 def activate_window(title):
     """强激活指定标题的窗口（Win32 API 置前，绕过前台锁定）。成功返回 True。"""
     import ctypes
     user32 = ctypes.windll.user32
-    hwnd = user32.FindWindowW(None, title)
+    hwnd = _find_window(title)
     if not hwnd:
         return False
+    user32.ShowWindow(hwnd, 5)          # SW_SHOW：显示（若隐藏到托盘）
     user32.ShowWindow(hwnd, 9)          # SW_RESTORE：还原（若最小化）
     user32.keybd_event(0x12, 0, 0, 0)   # Alt down
     user32.keybd_event(0x12, 0, 2, 0)   # Alt up
@@ -97,12 +134,29 @@ def _open_search(cfg):
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, cfg["title"])
+        hwnd = _find_window(cfg["title"])
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         ox, oy = cfg["search_offset"]
         pyautogui.click(rect.left + ox, rect.top + oy)
         time.sleep(0.6)
+
+
+def _click_input_box(cfg):
+    """QQ 进入会话后，输入框（富文本编辑区）可能没自动聚焦，点一下确保能粘贴。"""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    hwnd = _find_window(cfg["title"])
+    if not hwnd:
+        return
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    w = rect.right - rect.left
+    h = rect.bottom - rect.top
+    # 输入框在窗口底部，横跨大部分宽度；点底部中央偏左（避开右侧发送按钮）
+    pyautogui.click(rect.left + int(w * 0.5), rect.top + h - 90)
+    time.sleep(0.4)
 
 
 def _search_and_enter(name, cfg):
@@ -111,7 +165,9 @@ def _search_and_enter(name, cfg):
     _paste(name)
     time.sleep(cfg.get("result_wait", 0.3))   # 等搜索结果出现（QQ 比微信慢）
     _press_enter()                  # 进入会话
-    time.sleep(0.8)                 # 等会话打开、输入框聚焦
+    time.sleep(cfg.get("enter_wait", 0.8))    # 等会话打开、输入框聚焦
+    if cfg.get("input_click"):
+        _click_input_box(cfg)                 # QQ 输入框没聚焦，点一下
 
 
 def _verify_sent():
@@ -218,7 +274,10 @@ def send_many(names, content, interval=1.5, log=None, controller=None, on_progre
     cfg = PLATFORMS.get(platform, PLATFORMS["微信"])
     if not activate_window(cfg["title"]):
         if log:
-            log(f"⚠ 未找到「{platform}」窗口，请确认 {platform} 已打开且窗口未最小化到托盘。")
+            if platform == "QQ":
+                log("⚠ 未找到 QQ 主窗口。QQ 可能被关到托盘了，请点击屏幕右下角的 QQ 托盘图标打开主界面后重试。")
+            else:
+                log(f"⚠ 未找到「{platform}」窗口，请确认 {platform} 已打开且窗口未最小化到托盘。")
         return 0, list(names)
 
     ok, failed = 0, []
