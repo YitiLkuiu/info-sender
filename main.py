@@ -282,6 +282,168 @@ class WheelPicker(tk.Frame):
             self.cv.create_text(cx, y, text=self.values[idx], fill=fg, font=font)
 
 
+class RoundedEntry(tk.Frame):
+    """圆角输入框：Canvas 画圆角浅灰底 + 边框，内嵌 Entry，聚焦时边框变蓝。"""
+
+    def __init__(self, master, width=None, radius=10, padx=12, pady=6,
+                 bg=C_CARD, fill_bg=C_FIELD_BG, border=C_BORDER, accent=C_ACCENT, **kw):
+        super().__init__(master, bg=bg)
+        self.radius = radius
+        self.fill_bg = fill_bg
+        self.border = border
+        self.accent = accent
+        self._focused = False
+
+        self.cv = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
+        self.cv.place(x=0, y=0, relwidth=1, relheight=1)
+        self.entry = tk.Entry(self, relief="flat", bd=0, highlightthickness=0,
+                              bg=fill_bg, fg=C_TEXT, insertbackground=C_TEXT,
+                              font=(FONT, 11), width=width, **kw)
+        self.entry.pack(fill="both", expand=True, padx=padx, pady=pady)
+        self.entry.bind("<FocusIn>", self._on_focus_in)
+        self.entry.bind("<FocusOut>", self._on_focus_out)
+        self.bind("<Configure>", self._draw)
+        self._draw()
+
+    def _on_focus_in(self, e):
+        self._focused = True
+        self._draw()
+
+    def _on_focus_out(self, e):
+        self._focused = False
+        self._draw()
+
+    def _draw(self, e=None):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self.cv.delete("all")
+        outline = self.accent if self._focused else self.border
+        _draw_rounded(self.cv, 0, 0, w, h, self.radius, fill=self.fill_bg,
+                      outline=outline, width=1)
+        self.cv.lower()
+
+    # 代理到内部 Entry，保证现有 get/delete/insert/config/bind 调用不变
+    def get(self):
+        return self.entry.get()
+
+    def delete(self, *a):
+        return self.entry.delete(*a)
+
+    def insert(self, *a):
+        return self.entry.insert(*a)
+
+    def config(self, *a, **k):
+        return self.entry.config(*a, **k)
+
+    def configure(self, *a, **k):
+        return self.entry.configure(*a, **k)
+
+    def bind(self, *a, **k):
+        return self.entry.bind(*a, **k)
+
+    def focus_set(self):
+        return self.entry.focus_set()
+
+
+class RoundedText(tk.Frame):
+    """圆角多行文本框：Canvas 画圆角底，内嵌 Text，聚焦时边框变蓝。"""
+
+    def __init__(self, master, height=2, radius=10, padx=12, pady=7,
+                 bg=C_CARD, fill_bg=C_FIELD_BG, border=C_BORDER, accent=C_ACCENT, **kw):
+        super().__init__(master, bg=bg)
+        self.radius = radius
+        self.fill_bg = fill_bg
+        self.border = border
+        self.accent = accent
+        self._focused = False
+
+        self.cv = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
+        self.cv.place(x=0, y=0, relwidth=1, relheight=1)
+        self.text = tk.Text(self, height=height, relief="flat", bd=0, highlightthickness=0,
+                            bg=fill_bg, fg=C_TEXT, insertbackground=C_TEXT,
+                            font=(FONT, 11), wrap="word", **kw)
+        self.text.pack(fill="both", expand=True, padx=padx, pady=pady)
+        self.text.bind("<FocusIn>", self._on_focus_in)
+        self.text.bind("<FocusOut>", self._on_focus_out)
+        self.bind("<Configure>", self._draw)
+        self._draw()
+
+    def _on_focus_in(self, e):
+        self._focused = True
+        self._draw()
+
+    def _on_focus_out(self, e):
+        self._focused = False
+        self._draw()
+
+    def _draw(self, e=None):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self.cv.delete("all")
+        outline = self.accent if self._focused else self.border
+        _draw_rounded(self.cv, 0, 0, w, h, self.radius, fill=self.fill_bg,
+                      outline=outline, width=1)
+        self.cv.lower()
+
+    def get(self, *a):
+        return self.text.get(*a)
+
+    def insert(self, *a):
+        return self.text.insert(*a)
+
+    def delete(self, *a):
+        return self.text.delete(*a)
+
+
+class RoundedListbox(tk.Frame):
+    """圆角列表：Canvas 画圆角底，内嵌 Listbox。"""
+
+    def __init__(self, master, selectmode=tk.BROWSE, radius=10, padx=12, pady=7,
+                 bg=C_CARD, fill_bg=C_FIELD_BG, border=C_BORDER, **kw):
+        super().__init__(master, bg=bg)
+        self.radius = radius
+        self.fill_bg = fill_bg
+        self.border = border
+
+        self.cv = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
+        self.cv.place(x=0, y=0, relwidth=1, relheight=1)
+        self.listbox = tk.Listbox(self, selectmode=selectmode, exportselection=False,
+                                  font=(FONT, 11), relief="flat", bd=0, highlightthickness=0,
+                                  bg=fill_bg, fg=C_TEXT, selectbackground=C_ACCENT,
+                                  selectforeground="#ffffff", activestyle="none", **kw)
+        self.listbox.pack(fill="both", expand=True, padx=padx, pady=pady)
+        self.bind("<Configure>", self._draw)
+        self._draw()
+
+    def _draw(self, e=None):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self.cv.delete("all")
+        _draw_rounded(self.cv, 0, 0, w, h, self.radius, fill=self.fill_bg, outline=self.border, width=1)
+        self.cv.lower()
+
+    def insert(self, *a):
+        return self.listbox.insert(*a)
+
+    def delete(self, *a):
+        return self.listbox.delete(*a)
+
+    def curselection(self):
+        return self.listbox.curselection()
+
+    def selection_clear(self, *a):
+        return self.listbox.selection_clear(*a)
+
+    def selection_set(self, *a):
+        return self.listbox.selection_set(*a)
+
+    def itemconfig(self, *a, **k):
+        return self.listbox.itemconfig(*a, **k)
+
+
 def load_contacts():
     """读取通讯录，返回 {"微信": [...], "QQ": [...]}。兼容旧的纯列表格式。"""
     empty = {p: [] for p in PLATFORM_NAMES}
@@ -386,9 +548,7 @@ class App:
         return PillButton(parent, text=text, command=command, kind=kind, **kw)
 
     def _entry(self, parent, width=None, **kw):
-        return tk.Entry(parent, font=self._f(11), relief="flat", bd=0, highlightthickness=1,
-                        highlightbackground=C_BORDER, highlightcolor=C_ACCENT,
-                        bg=C_FIELD_BG, fg=C_TEXT, insertbackground=C_TEXT, width=width, **kw)
+        return RoundedEntry(parent, width=width, **kw)
 
     # ---------- 界面 ----------
     def _build_ui(self):
@@ -416,11 +576,14 @@ class App:
                 return
             cv.delete("all")
             _draw_gradient_rounded(cv, 0, 2, w, 84, 16, "#3b82f6", "#6a5cff")
+            # 玻璃反光光斑（部分溢出边界，模拟柔光）
+            cv.create_oval(-70, -50, 200, 150, fill="#5a8cff", outline="")
+            cv.create_oval(w - 170, 16, w + 40, 180, fill="#8a7bff", outline="")
             cv.create_text(26, 30, anchor="w", text="信息发送助手",
                            fill="#ffffff", font=(FONT, 19, "bold"))
             cv.create_text(26, 56, anchor="w", text="微信 / QQ · 批量群发 · 定时发送 · 文件消息",
                            fill="#e8ecff", font=(FONT, 10))
-            cv.create_text(w - 26, 44, anchor="e", text="v1.5",
+            cv.create_text(w - 26, 44, anchor="e", text="v1.6",
                            fill="#ffffff", font=(FONT, 12, "bold"))
 
         cv.bind("<Configure>", draw)
@@ -454,10 +617,7 @@ class App:
             self.platform_btns[p] = b
         self._refresh_platform_buttons()
 
-        self.content_text = tk.Text(card.body, height=2, font=self._f(11), relief="flat", bd=0,
-                                    highlightthickness=1, highlightbackground=C_BORDER,
-                                    highlightcolor=C_ACCENT, bg=C_FIELD_BG, fg=C_TEXT,
-                                    insertbackground=C_TEXT, padx=10, pady=8, wrap="word")
+        self.content_text = RoundedText(card.body, height=2)
         self.content_text.grid(row=1, column=0, sticky="ew")
 
         rowf = tk.Frame(card.body, bg=C_CARD)
@@ -499,10 +659,7 @@ class App:
 
         self._card_title(card, "👥 通讯录", "Ctrl + 点击 多选")
 
-        self.listbox = tk.Listbox(card.body, selectmode=tk.EXTENDED, exportselection=False,
-                                  font=self._f(11), relief="flat", bd=0, highlightthickness=0,
-                                  bg=C_FIELD_BG, fg=C_TEXT, selectbackground=C_ACCENT,
-                                  selectforeground="#ffffff", activestyle="none")
+        self.listbox = RoundedListbox(card.body, selectmode=tk.EXTENDED)
         self.listbox.grid(row=1, column=0, sticky="nsew")
 
         addf = tk.Frame(card.body, bg=C_CARD)
@@ -524,10 +681,7 @@ class App:
 
         self._card_title(card, "📦 任务", "选中后操作")
 
-        self.task_listbox = tk.Listbox(card.body, exportselection=False, font=self._f(11),
-                                       relief="flat", bd=0, highlightthickness=0,
-                                       bg=C_FIELD_BG, fg=C_TEXT, selectbackground=C_ACCENT,
-                                       selectforeground="#ffffff", activestyle="none")
+        self.task_listbox = RoundedListbox(card.body)
         self.task_listbox.grid(row=1, column=0, sticky="nsew")
 
         btns = tk.Frame(card.body, bg=C_CARD)
@@ -708,6 +862,13 @@ class App:
 
         footer = tk.Frame(win, bg=C_BG)
         footer.pack(padx=12, pady=(4, 12), fill="x")
+
+        # 定位到日期输入框正下方（而非默认居中）
+        win.update_idletasks()
+        ex = self.date_entry.winfo_rootx()
+        ey = self.date_entry.winfo_rooty() + self.date_entry.winfo_height() + 6
+        win.geometry(f"+{ex}+{ey}")
+
         PillButton(footer, text="清除日期",
                    command=lambda: (self.date_entry.delete(0, tk.END), win.destroy()),
                    kind="danger", height=26, padx=12).pack(side="right")
@@ -749,6 +910,12 @@ class App:
 
         footer = tk.Frame(win, bg=C_BG)
         footer.pack(padx=20, pady=(6, 14), fill="x")
+
+        # 定位到时间输入框正下方（而非默认居中）
+        win.update_idletasks()
+        ex = self.time_entry.winfo_rootx()
+        ey = self.time_entry.winfo_rooty() + self.time_entry.winfo_height() + 6
+        win.geometry(f"+{ex}+{ey}")
 
         def confirm():
             self.time_entry.delete(0, tk.END)
