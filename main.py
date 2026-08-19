@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import threading
+import traceback
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, scrolledtext, filedialog
@@ -583,7 +584,7 @@ class App:
                            fill="#ffffff", font=(FONT, 19, "bold"))
             cv.create_text(26, 56, anchor="w", text="微信 / QQ · 批量群发 · 定时发送 · 文件消息",
                            fill="#e8ecff", font=(FONT, 10))
-            cv.create_text(w - 26, 44, anchor="e", text="v1.7",
+            cv.create_text(w - 26, 44, anchor="e", text="v1.9",
                            fill="#ffffff", font=(FONT, 12, "bold"))
 
         cv.bind("<Configure>", draw)
@@ -960,10 +961,16 @@ class App:
             self.root.after(0, self._refresh_tasks)
 
         def worker():
-            ok, failed = core.send_many(
-                task.names, task.content, interval=task.interval,
-                log=self.log, controller=task.controller, on_progress=progress,
-                platform=task.platform, file_path=task.file)
+            try:
+                ok, failed = core.send_many(
+                    task.names, task.content, interval=task.interval,
+                    log=self.log, controller=task.controller, on_progress=progress,
+                    platform=task.platform, file_path=task.file)
+            except Exception:
+                task.status = "done"
+                self.root.after(0, self._refresh_tasks)
+                self.log(f"任务{task.id} 发送时发生异常：\n{traceback.format_exc()}")
+                return
             task.status = "cancelled" if task.controller.cancelled else "done"
             self.root.after(0, self._refresh_tasks)
             self.log(f"任务{task.id} 结束：成功 {ok} 条，失败 {len(failed)} 条")
@@ -976,17 +983,22 @@ class App:
     def _start_task(self, task):
         if task.hour is not None:
             def wait_then_run():
-                if scheduler.wait_until(task.hour, task.minute, controller=task.controller,
-                                        month=task.month, day=task.day):
-                    if task.controller.cancelled:
-                        return
-                    task.status = "running"
+                try:
+                    if scheduler.wait_until(task.hour, task.minute, controller=task.controller,
+                                            month=task.month, day=task.day):
+                        if task.controller.cancelled:
+                            return
+                        task.status = "running"
+                        self.root.after(0, self._refresh_tasks)
+                        self.log(f"任务{task.id} 到点，开始发送...")
+                        self._run_task(task)
+                    else:
+                        task.status = "cancelled"
+                        self.root.after(0, self._refresh_tasks)
+                except Exception:
+                    task.status = "done"
                     self.root.after(0, self._refresh_tasks)
-                    self.log(f"任务{task.id} 到点，开始发送...")
-                    self._run_task(task)
-                else:
-                    task.status = "cancelled"
-                    self.root.after(0, self._refresh_tasks)
+                    self.log(f"任务{task.id} 定时等待时发生异常：\n{traceback.format_exc()}")
             task.thread = threading.Thread(target=wait_then_run, daemon=True)
             task.thread.start()
         else:

@@ -21,14 +21,16 @@ PLATFORMS = {
     # file_paste_wait = 粘贴文件后，等附件加载的秒数；file_send_wait = 回车后等发送完成的秒数。
     # QQ 响应比微信慢，两个等待都加长，避免「附件没加载好就回车」导致漏发。
     "微信": {"title": "微信", "open_search": "hotkey", "search_offset": None,  "result_wait": 0.3,
-             "file_paste_wait": 1.2, "file_send_wait": 0.5},
+             "file_paste_wait": 1.2, "file_send_wait": 0.5,
+             "restore_wait": 0.6, "verify_restore": False},
     # QQ 没有可靠的搜索快捷键（脚本模拟 Ctrl+F 不触发），改用「点击顶部搜索框」。
     # search_offset = 搜索框中心相对窗口左上角的偏移(像素)，窗口移动/最大化都按此相对位置算。
     # enter_wait = 回车进入会话后等待的秒数；QQ 比微信慢，且进入后输入框可能没聚焦，
     #              需要 input_click=True 额外点一下底部输入框，否则粘贴会落空。
     "QQ":   {"title": "QQ",   "open_search": "click",  "search_offset": (202, 83), "result_wait": 0.9,
              "file_paste_wait": 1.8, "file_send_wait": 0.8,
-             "enter_wait": 1.5, "input_click": True},
+             "enter_wait": 1.5, "input_click": True,
+             "restore_wait": 1.5, "verify_restore": True},
 }
 
 
@@ -94,9 +96,14 @@ def _find_window(title):
     return candidates[0][1]
 
 
-def activate_window(title):
-    """强激活指定标题的窗口（Win32 API 置前，绕过前台锁定）。成功返回 True。"""
+def activate_window(title, restore_wait=0.6, verify_restore=False):
+    """强激活指定标题的窗口（Win32 API 置前，绕过前台锁定）。成功返回 True。
+
+    QQ 从托盘还原比微信慢，restore_wait 给更长的等待；verify_restore=True 时
+    会轮询窗口尺寸，确认真正还原成正常大小再继续，避免「点搜索框」点到旧的小坐标。
+    """
     import ctypes
+    from ctypes import wintypes
     user32 = ctypes.windll.user32
     hwnd = _find_window(title)
     if not hwnd:
@@ -106,7 +113,16 @@ def activate_window(title):
     user32.keybd_event(0x12, 0, 0, 0)   # Alt down
     user32.keybd_event(0x12, 0, 2, 0)   # Alt up
     user32.SetForegroundWindow(hwnd)
-    time.sleep(0.6)
+    time.sleep(restore_wait)
+    if verify_restore:
+        for _ in range(10):
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            if (r.right - r.left) >= 200 and (r.bottom - r.top) >= 200:
+                break                       # 已还原成正常窗口大小
+            user32.ShowWindow(hwnd, 9)
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.5)
     return True
 
 
@@ -135,6 +151,8 @@ def _open_search(cfg):
         from ctypes import wintypes
         user32 = ctypes.windll.user32
         hwnd = _find_window(cfg["title"])
+        if not hwnd:
+            return
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         ox, oy = cfg["search_offset"]
@@ -261,47 +279,62 @@ def send_one(name, content, interval=1.5, cfg=None, file_path=None):
     return ok
 
 
+_SEND_LOCK = threading.Lock()   # 微信/QQ 共用前台窗口与剪贴板，多个发送任务必须排队，否则会抢焦点发错窗口
+
+
 def send_many(names, content, interval=1.5, log=None, controller=None, on_progress=None, platform="微信", file_path=None):
     """给多个对象逐个发消息。
 
     controller: SendController，用于暂停/取消。
     on_progress: 回调(done, total, ok, failed)，每处理一条调用。
     返回 (成功数, 失败名单)。
+
+    串行化：微信/QQ 定时到同一时刻会并发触发，若同时操作前台窗口和剪贴板
+    会互相抢焦点导致都发不出去，这里用全局锁强制排队。
     """
     names = [n.strip() for n in names if n and n.strip()]
-    if log:
-        log("正在激活窗口...")
     cfg = PLATFORMS.get(platform, PLATFORMS["微信"])
-    if not activate_window(cfg["title"]):
-        if log:
-            if platform == "QQ":
-                log("⚠ 未找到 QQ 主窗口。QQ 可能被关到托盘了，请点击屏幕右下角的 QQ 托盘图标打开主界面后重试。")
-            else:
-                log(f"⚠ 未找到「{platform}」窗口，请确认 {platform} 已打开且窗口未最小化到托盘。")
-        return 0, list(names)
 
-    ok, failed = 0, []
-    total = len(names)
-    for i, name in enumerate(names):
-        if controller and controller.cancelled:
-            break
-        if controller:
-            controller.wait_if_paused()
-        if controller and controller.cancelled:
-            break
-        try:
+    if not _SEND_LOCK.acquire(blocking=False):
+        if log:
+            log("⏳ 有另一个发送任务正在进行，本任务排队等待其完成...")
+        _SEND_LOCK.acquire()
+    try:
+        if log:
+            log("正在激活窗口...")
+        if not activate_window(cfg["title"], restore_wait=cfg.get("restore_wait", 0.6),
+                               verify_restore=cfg.get("verify_restore", False)):
             if log:
-                log(f"[{i + 1}/{total}] 发送给：{name}")
-            if send_one(name, content, interval, cfg, file_path=file_path):
-                ok += 1
-            else:
+                if platform == "QQ":
+                    log("⚠ 未找到 QQ 主窗口。QQ 可能被关到托盘了，请点击屏幕右下角的 QQ 托盘图标打开主界面后重试。")
+                else:
+                    log(f"⚠ 未找到「{platform}」窗口，请确认 {platform} 已打开且窗口未最小化到托盘。")
+            return 0, list(names)
+
+        ok, failed = 0, []
+        total = len(names)
+        for i, name in enumerate(names):
+            if controller and controller.cancelled:
+                break
+            if controller:
+                controller.wait_if_paused()
+            if controller and controller.cancelled:
+                break
+            try:
+                if log:
+                    log(f"[{i + 1}/{total}] 发送给：{name}")
+                if send_one(name, content, interval, cfg, file_path=file_path):
+                    ok += 1
+                else:
+                    failed.append(name)
+                    if log:
+                        log(f"  ⚠ 未找到「{name}」或发送失败，已跳过")
+            except Exception as e:
                 failed.append(name)
                 if log:
-                    log(f"  ⚠ 未找到「{name}」或发送失败，已跳过")
-        except Exception as e:
-            failed.append(name)
-            if log:
-                log(f"  发送「{name}」时出错：{e}")
-        if on_progress:
-            on_progress(i + 1, total, ok, len(failed))
-    return ok, failed
+                    log(f"  发送「{name}」时出错：{e}")
+            if on_progress:
+                on_progress(i + 1, total, ok, len(failed))
+        return ok, failed
+    finally:
+        _SEND_LOCK.release()
